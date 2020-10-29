@@ -1,0 +1,534 @@
+
+import java.net.HttpURLConnection;
+import java.util.Arrays;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.time.DayOfWeek;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
+import java.util.Iterator;
+import java.util.Scanner;
+import java.util.ArrayList;
+import java.util.List;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.Period;
+
+import java.nio.file.Files; // luokka tiedostojen käsittelyyn
+import java.nio.file.Path;
+import java.nio.file.Paths; // luokka tiedostojen polkujen määrittelemiseksi
+import java.nio.file.StandardOpenOption;
+import java.io.IOException; // poikkeusluokka virhetilanteita varten
+import java.nio.charset.StandardCharsets; // merkistöluokka, jossa yleisimmät merkistöt
+
+import org.telegram.telegrambots.ApiContextInitializer;
+import org.telegram.telegrambots.bots.TelegramLongPollingBot;
+import org.telegram.telegrambots.meta.TelegramBotsApi;
+import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.objects.Update;
+import org.telegram.telegrambots.meta.api.objects.User;
+import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
+import org.json.simple.*;
+import org.json.simple.parser.*;
+
+// Made according to https://github.com/rubenlagus/TelegramBots/blob/master/TelegramBots.wiki/Getting-Started.md
+
+public class ChatBot extends TelegramLongPollingBot {
+	Path tiedostonPolku = Paths.get("maksut.txt");
+	Path tiedostoPolku = Paths.get("summa.txt");
+
+	public void onUpdateReceived(Update update) {
+		// We check if the update has a message and the message has text
+		if (update.hasMessage() && update.getMessage().hasText()) {
+			String user_first_name = update.getMessage().getChat().getFirstName();
+			System.out.println(user_first_name);
+			String kokoteksti = update.getMessage().getText();
+			String sanotaanTakaisin = "";
+			if (kokoteksti.contains(" ")) {
+				String[] solut = kokoteksti.split(" ");
+				String viestinAlku = solut[0];
+				if (solut.length == 2) {
+					System.out.println("JUKKA " + solut[1]);
+				}
+				sanotaanTakaisin = sanoTakaisin(kokoteksti, user_first_name);
+
+			} else {
+				sanotaanTakaisin = sanoTakaisin(kokoteksti, user_first_name);
+			}
+			SendMessage message = new SendMessage() // Create a SendMessage
+													// object with mandatory
+													// fields
+					.setChatId(update.getMessage().getChatId()).setText(sanotaanTakaisin);
+			try {
+				execute(message); // Call method to send the message
+
+			} catch (TelegramApiException e) {
+				e.printStackTrace();
+			}
+		}
+	}
+
+	public String sanoTakaisin(String botilleSanottua, String user_first_name) {
+
+		System.out.println(botilleSanottua);
+		String sanotaanTakaisin = "";
+		String[] merkit = botilleSanottua.split(" ");
+		String alkuteksti = merkit[0];
+		if (alkuteksti.equals("/paivaa")) {
+			sanotaanTakaisin = kellonaika();
+		} else if (alkuteksti.equals("/weather")) {
+			sanotaanTakaisin = etsiSaa();
+		} else if (alkuteksti.equals("/foodmenu")) {
+			sanotaanTakaisin = etsiRuokalista();
+
+		} else if (alkuteksti.equals("/ohje")) {
+			sanotaanTakaisin = ohje();
+		} else if (alkuteksti.equals("/lisaa")) {
+			String kasky = merkit[0];
+			String pvm = merkit[1];
+			String maksu = merkit[2];
+			String ostos = "";
+			if (merkit.length == 3) {
+				ostos = merkit[3];
+			} else if (merkit.length > 3) {
+				for (int i = 3; i < merkit.length; i++) {
+					ostos = ostos + merkit[i] + " ";
+				}
+			}
+			String henkilo = "";
+			if (user_first_name == null) {
+				henkilo = "Tuntematon";
+				user_first_name = "Tuntematon";
+			} else {
+				henkilo = user_first_name;
+			}
+			String teksti = pvm + " " + maksu + " " + ostos + " " + user_first_name;
+			lisaaMaksu(teksti);
+			summa(maksu);
+			sanotaanTakaisin = "listasit maksun";
+
+		} else if (alkuteksti.equals("/tulosta")) {
+
+			sanotaanTakaisin = tulosta() + "summa: " + tulostaSumma();
+
+		} else if (alkuteksti.equals("/delete")) {
+			String[] poisto = botilleSanottua.split(" ");
+			String kaskymerkki = poisto[0];
+			int rivinro = Integer.parseInt(poisto[1]);
+			poistaSummasta(rivinro);
+			poista(rivinro);
+			sanotaanTakaisin = "poistit rivin " + rivinro;
+		} else if (alkuteksti.equals("/etsi")) {
+			String[] etsi = botilleSanottua.split(" ");
+			String henkilo = etsi[1];
+			sanotaanTakaisin = etsi(henkilo);
+		} else if (botilleSanottua.equals("/poista kaikki")) {
+			poistaSumma();
+			poistaKaikki();
+			sanotaanTakaisin = "Tyhjensit kaikki maksut";
+		}
+
+		return sanotaanTakaisin;
+	}
+
+	public void poistaKaikki() {
+		try {
+			// readAllLines palauttaa kaikki rivit List<String>-listana. Tiedoston polun
+			// lisäksi metodille kannattaa määritellä tiedoston merkistökoodaus (UTF-8):
+			List<String> rivit = Files.readAllLines(tiedostonPolku, StandardCharsets.UTF_8);
+			List<String> uudetrivit = new ArrayList<String>();
+			for (String rivi : rivit) {
+				uudetrivit.add(rivi);
+			}
+			int i = 0;
+			while (i < uudetrivit.size()) {
+				uudetrivit.remove(i);
+
+			}
+
+			Files.write(tiedostonPolku, uudetrivit, StandardCharsets.UTF_8, StandardOpenOption.TRUNCATE_EXISTING);
+
+		} catch (IOException e) {
+			System.out.println(e);
+		}
+
+	}
+
+	public void poistaSumma() {
+		try {
+			// readAllLines palauttaa kaikki rivit List<String>-listana. Tiedoston polun
+			// lisäksi metodille kannattaa määritellä tiedoston merkistökoodaus (UTF-8):
+			List<String> rivit = Files.readAllLines(tiedostoPolku, StandardCharsets.UTF_8);
+			List<String> tyhjalista = new ArrayList<String>();
+			int i = 0;
+			for (String rivi : rivit) {
+				tyhjalista.add(rivi);
+
+			}
+			System.out.println(tyhjalista);
+			while (i < tyhjalista.size()) {
+				tyhjalista.remove(i);
+
+			}
+			System.out.println(tyhjalista);
+			Files.write(tiedostoPolku, tyhjalista, StandardCharsets.UTF_8, StandardOpenOption.TRUNCATE_EXISTING);
+
+		} catch (IOException e) {
+			System.out.println(e);
+		}
+
+	}
+
+	public String etsi(String henkilo) {
+		List<String> etsirivit = new ArrayList<String>();
+		String palauta = "";
+		int summa = 0;
+		try {
+			// readAllLines palauttaa kaikki rivit List<String>-listana. Tiedoston polun
+			// lisäksi metodille kannattaa määritellä tiedoston merkistökoodaus (UTF-8):
+			List<String> rivit = Files.readAllLines(tiedostonPolku, StandardCharsets.UTF_8);
+
+			for (String rivi : rivit) {
+				etsirivit.add(rivi);
+			}
+
+			for (int i = 0; i < etsirivit.size(); i++) {
+				String[] etsinimi = etsirivit.get(i).split(" ");
+				for (int j = 0; j < etsinimi.length; j++) {
+					if (etsinimi[j].equals(henkilo)) {
+						for (int a = 0; a < etsinimi.length; a++) {
+							palauta = palauta + etsinimi[a] + " ";
+							if (a == 1) {
+								summa = summa + Integer.parseInt(etsinimi[1]);
+							}
+						}
+						palauta = palauta + "\n";
+					}
+				}
+			}
+			
+		} catch (IOException e) {
+			System.out.println(e);
+		}
+
+		return  palauta + "summa: " + summa;
+	}
+
+	public void poista(int rivinro) {
+		try {
+			// readAllLines palauttaa kaikki rivit List<String>-listana. Tiedoston polun
+			// lisäksi metodille kannattaa määritellä tiedoston merkistökoodaus (UTF-8):
+			List<String> rivit = Files.readAllLines(tiedostonPolku, StandardCharsets.UTF_8);
+			List<String> uudetrivit = new ArrayList<String>();
+			int i = 0;
+			for (String rivi : rivit) {
+				uudetrivit.add(rivi);
+				if (i + 1 == rivinro) {
+					uudetrivit.remove(i);
+				}
+				i++;
+				// luo usi lista, josta poistettu, kirjoita vanhan päälle
+			}
+			Files.write(tiedostonPolku, uudetrivit, StandardCharsets.UTF_8, StandardOpenOption.TRUNCATE_EXISTING);
+			System.out.println("poistit rivin " + rivinro);
+
+		} catch (IOException e) {
+			System.out.println(e);
+		}
+
+	}
+
+	public void poistaSummasta(int rivinro) {
+
+		try {
+			// readAllLines palauttaa kaikki rivit List<String>-listana. Tiedoston polun
+			// lisäksi metodille kannattaa määritellä tiedoston merkistökoodaus (UTF-8):
+			List<String> rivit = Files.readAllLines(tiedostoPolku, StandardCharsets.UTF_8);
+
+			List<String> uudetrivit = new ArrayList<String>();
+			int i = 0;
+			for (String rivi : rivit) {
+				uudetrivit.add(rivi);
+				if (i + 1 == rivinro) {
+					uudetrivit.remove(i);
+				}
+				i++;
+				// luo usi lista, josta poistettu, kirjoita vanhan päälle
+			}
+			Files.write(tiedostoPolku, uudetrivit, StandardCharsets.UTF_8, StandardOpenOption.TRUNCATE_EXISTING);
+
+		} catch (IOException e) {
+			System.out.println(e);
+		}
+
+	}
+
+	public void summa(String maksu) {
+
+		try {
+			// Tiedostoon kirjoitetaan listalla olevat rivit:
+			List<String> rivit = Arrays.asList(maksu);
+
+			// Files.write kirjoittaa listan sisällön riveittäin annettuun tiedostoon
+			Files.write(tiedostoPolku, rivit, StandardCharsets.UTF_8, StandardOpenOption.APPEND); // muista
+																									// merkistökoodaus!
+
+			System.out.println("Lisasit menon vuosi summaan");
+
+		} catch (IOException e) {
+			System.out.println(e);
+		}
+
+	}
+
+	public int tulostaSumma() {
+		int summa = 0;
+		try {
+			// readAllLines palauttaa kaikki rivit List<String>-listana. Tiedoston polun
+			// lisäksi metodille kannattaa määritellä tiedoston merkistökoodaus (UTF-8):
+			List<String> rivit = Files.readAllLines(tiedostoPolku, StandardCharsets.UTF_8);
+
+			System.out.println("Tiedostosta luettiin rivit:");
+			for (String rivi : rivit) {
+				summa = summa + Integer.parseInt(rivi);
+
+			}
+
+		} catch (IOException e) {
+			System.out.println(e);
+		}
+		return summa;
+
+	}
+
+	public void lisaaMaksu(String teksti) {
+
+		try {
+			// Tiedostoon kirjoitetaan listalla olevat rivit:
+			List<String> rivit = Arrays.asList(teksti);
+			
+			
+			// Files.write kirjoittaa listan sisällön riveittäin annettuun tiedostoon
+			Files.write(tiedostonPolku, rivit, StandardCharsets.UTF_8, StandardOpenOption.APPEND); // muista
+			
+
+			System.out.println("Tiedosto kirjoitettiin onnistuneesti!");
+
+		} catch (IOException e) {
+			System.out.println(e);
+		}
+
+	}
+
+	public String tulosta() {
+		String tiedosto = "";
+		try {
+			// readAllLines palauttaa kaikki rivit List<String>-listana. Tiedoston polun
+			// lisäksi metodille kannattaa määritellä tiedoston merkistökoodaus (UTF-8):
+			List<String> rivit = Files.readAllLines(tiedostonPolku, StandardCharsets.UTF_8);
+			List <String> uusilista= new ArrayList <String>();
+			int i=1;
+			System.out.println("Tiedostosta luettiin rivit:");
+			for (String rivi : rivit) {
+				uusilista.add(rivi);
+				tiedosto = tiedosto+ i + " " + rivi + "\n";
+				i++;
+			}
+			System.out.println(uusilista);
+
+		} catch (IOException e) {
+			System.out.println(e);
+		}
+		return tiedosto;
+
+	}
+
+	public String ohje() {
+		return "Käskyjä:\n/paivaa\n/lisaa + pvm + maksu + rahan käytön kohde\n/tulosta\n/etsi + henkilon nimi\n/delete + rivinro, jonka haluat poistaa\n/poista kaikki  ";
+	}
+
+	public String kellonaika() {
+		LocalTime nykyhetki = LocalTime.now();
+		int tunnit = nykyhetki.getHour();
+		String kello = "";
+		if (tunnit >= 7 && tunnit <= 9.59) {
+			kello = "Hyvää huomenta!";
+		}
+		if (tunnit >= 10 && tunnit <= 16.59) {
+			kello = "Hyvää päivää!";
+		}
+		if (tunnit >= 17 && tunnit <= 21.59) {
+			kello = "Hyvää iltaa!";
+		}
+		if (tunnit >= 22 && tunnit < 24 || tunnit >= 0.00 && tunnit < 7.00) {
+			kello = "Hyvää yötä!";
+		}
+		return kello;
+	}
+
+	public String etsiRuokalista() {
+		LocalDate tanaan = LocalDate.now();
+		int vuosi = tanaan.getYear();
+		int kuukausi = tanaan.getMonthValue();
+		int paiva = tanaan.getDayOfMonth();
+		DayOfWeek viikonpaivaOlio = tanaan.getDayOfWeek();
+		String viikonpaiva = viikonpaivaOlio.toString();
+		String paivaTanaan = paiva + "." + kuukausi + "." + vuosi;
+		String inline = "";
+		String ruokainfo = viikonpaiva + " " + paivaTanaan + " ";
+		try {
+			URL url = new URL("https://hhapp.info/api/amica/pasila/fi");
+			HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+			conn.setRequestMethod("GET");
+			conn.connect();
+			int responsecode = conn.getResponseCode();
+			if (responsecode != 200) {
+				throw new RuntimeException("HttpResponseCode: " + responsecode);
+			} else {
+				Scanner sc = new Scanner(url.openStream());
+				while (sc.hasNext()) {
+					inline += sc.nextLine();
+				}
+				sc.close();
+				System.out.println("\nJSON data in string format");
+				// System.out.println(inline);
+				JSONParser parse = new JSONParser();
+
+				JSONObject result = (JSONObject) parse.parse(inline);
+				JSONArray menus = (JSONArray) result.get("LunchMenus");
+				Iterator i = menus.iterator();
+
+				System.out.println("TAPANI: ");
+
+				while (i.hasNext()) {
+					JSONObject weekinfo = (JSONObject) i.next();
+					String dayOfWeek = (String) weekinfo.get("DayOfWeek");
+					System.out.println(dayOfWeek);
+					String date = (String) weekinfo.get("Date");
+					System.out.println(date);
+					JSONArray linjastot = (JSONArray) weekinfo.get("SetMenus");
+					Iterator j = linjastot.iterator();
+					while (j.hasNext()) {
+						JSONObject mealInfo = (JSONObject) j.next();
+						JSONArray setmenus = (JSONArray) mealInfo.get("SetMenus");
+
+						JSONArray meals = (JSONArray) mealInfo.get("Meals");
+						Iterator k = meals.iterator();
+						while (k.hasNext()) {
+							JSONObject dayInfo = (JSONObject) k.next();
+							String name = (String) dayInfo.get("Name");
+							System.out.println(name);
+
+							if (date.equals(paivaTanaan)) {
+								ruokainfo = ruokainfo + " " + name;
+							}
+						}
+					}
+				}
+
+			}
+
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+
+		return ruokainfo;
+	}
+
+	public String etsiSaa() {
+		String inline = "";
+		try {
+			URL url = new URL(
+					"http://api.openweathermap.org/data/2.5/weather?q=Helsinki&APPID=a8720cf3a65bd981b2fecc6381cd729e&units=metric");
+			HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+			conn.setRequestMethod("GET");
+			conn.connect();
+			int responsecode = conn.getResponseCode();
+			if (responsecode != 200) {
+				throw new RuntimeException("HttpResponseCode: " + responsecode);
+			} else {
+				Scanner sc = new Scanner(url.openStream());
+				while (sc.hasNext()) {
+					inline += sc.nextLine();
+				}
+				sc.close();
+				System.out.println("\nJSON data in string format");
+				System.out.println(inline);
+				JSONParser parse = new JSONParser();
+
+				JSONObject result = (JSONObject) parse.parse(inline);
+				JSONObject main = (JSONObject) result.get("main");
+				double temp = (Double) main.get("temp");
+				conn.disconnect();
+				url = new URL(
+						"http://api.openweathermap.org/data/2.5/weather?q=Nurmijarvi&APPID=a8720cf3a65bd981b2fecc6381cd729e&units=metric");
+				conn = (HttpURLConnection) url.openConnection();
+				conn.setRequestMethod("GET");
+				conn.connect();
+
+				sc = new Scanner(url.openStream());
+				inline = "";
+				while (sc.hasNext()) {
+					inline += sc.nextLine();
+				}
+				sc.close();
+				System.out.println("\nJSON data in string format");
+				System.out.println(inline);
+				parse = new JSONParser();
+
+				result = (JSONObject) parse.parse(inline);
+				main = (JSONObject) result.get("main");
+
+				JSONObject wind = (JSONObject) result.get("wind");
+				double speed = (Double) wind.get("speed");
+				System.out.println("wind speed");
+				conn.disconnect();
+
+				LocalDate tanaan = LocalDate.now();
+				int vuosi = tanaan.getYear();
+				int kuukausi = tanaan.getMonthValue();
+				int paiva = tanaan.getDayOfMonth();
+				DayOfWeek viikonpaivaOlio = tanaan.getDayOfWeek();
+				String viikonpaiva = viikonpaivaOlio.toString();
+
+				DateTimeFormatter dtf = DateTimeFormatter.ofPattern("HH:mm:ss");
+				LocalDateTime now = LocalDateTime.now();
+				String aika = dtf.format(now);
+
+				System.out.println("JUKKA " + temp);
+				inline = "Outside at Helsinki it is now " + temp + "C. Wind speed is: " + speed + "m/s. Today is "
+						+ viikonpaiva + " " + paiva + "." + kuukausi + "." + vuosi + " at " + aika + ".";
+			}
+
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		return inline;
+	}
+
+	public String getBotUsername() {
+
+		return "inarabot";
+	}
+
+	@Override
+	public String getBotToken() {
+		return "1135007463:AAGTeXwmdASNWW0HY0EuWIPIm91QPyKb_j8";
+	}
+
+	public static void main(String[] args) {
+
+		ApiContextInitializer.init();
+
+		TelegramBotsApi botsApi = new TelegramBotsApi();
+
+		try {
+			botsApi.registerBot(new ChatBot());
+		} catch (TelegramApiException e) {
+			e.printStackTrace();
+		}
+	}
+}
